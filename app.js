@@ -258,12 +258,50 @@ $("btnClearBib").addEventListener("click", () => {
 // DOI -> BibTeX (Crossref)
 // ---------------------------
 
-async function fetchBibtexFromCrossref(doi) {
-  // Crossref transform endpoint
-  const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}/transform/application/x-bibtex`;
-  const res = await fetch(url, { method: "GET" });
-  if (!res.ok) throw new Error(`Crossref error for ${doi}: ${res.status}`);
-  return await res.text();
+async function fetchCrossrefJson(doi) {
+  const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Crossref error ${res.status}`);
+  const data = await res.json();
+  return data.message;
+}
+
+function crossrefToBibEntry(msg) {
+  const type = "article"; // default; we can map Crossref types later
+  const year = msg?.issued?.["date-parts"]?.[0]?.[0] ?? "";
+  const title = (msg.title && msg.title[0]) ? msg.title[0] : "";
+  const journal = (msg["container-title"] && msg["container-title"][0]) ? msg["container-title"][0] : "";
+  const volume = msg.volume ?? "";
+  const number = msg.issue ?? "";
+  const pages = msg.page ?? "";
+  const doi = msg.DOI ?? "";
+  const url = doi ? `https://doi.org/${doi}` : (msg.URL ?? "");
+
+  const authors = (msg.author || []).map(a => {
+    const given = a.given ? a.given.trim() : "";
+    const family = a.family ? a.family.trim() : "";
+    // Convert "given family" into "G F Family" later by your normalize function
+    return [given, family].filter(Boolean).join(" ").trim();
+  }).filter(Boolean).join(" and ");
+
+  // simple key: FirstAuthorFamilyYearFirstWord
+  const firstFamily = (msg.author && msg.author[0] && msg.author[0].family) ? msg.author[0].family : "ref";
+  const firstWord = title ? title.split(/\s+/)[0].replace(/[^A-Za-z0-9]/g, "") : "paper";
+  const key = `${firstFamily}${year}${firstWord}`.replace(/\s+/g, "");
+
+  const fields = {
+    author: authors,
+    title: title,
+    journal: journal,
+    year: String(year),
+    volume: String(volume),
+    number: String(number),
+    pages: String(pages),
+    doi: doi,
+    url: url
+  };
+
+  return { type, key, fields };
 }
 
 $("btnConvertDoi").addEventListener("click", async () => {
@@ -282,20 +320,18 @@ $("btnConvertDoi").addEventListener("click", async () => {
   let failed = 0;
 
   for (const doi of dois) {
-    try {
-      const rawBib = await fetchBibtexFromCrossref(doi);
-      // Normalize fetched bib
-      const parsed = parseEntry(rawBib);
-      if (!parsed) throw new Error("Received unparseable BibTeX.");
-      // Make sure DOI recorded even if missing in bib
-      if (!parsed.fields.doi) parsed.fields.doi = doi;
-      combined += formatEntry(parsed) + "\n";
-      ok++;
-    } catch (e) {
-      combined += `% Failed DOI: ${doi} (${e.message})\n`;
-      failed++;
-    }
+  try {
+    const msg = await fetchCrossrefJson(doi);
+    const entry = crossrefToBibEntry(msg);
+
+    // Apply your normalization pipeline
+    combined += formatEntry(entry) + "\n";
+    ok++;
+  } catch (e) {
+    combined += `% Failed DOI: ${doi} (${e.message})\n`;
+    failed++;
   }
+}
 
   doiOut.value = combined.trim() + "\n";
   setStatus(`Converted ${ok} DOI(s). Failed: ${failed}.`);
