@@ -119,6 +119,25 @@ function normalizeAuthors(authorField) {
   if (noDots.checked) out = out.replace(/\./g, "");
   return out;
 }
+function latexifyChemicalFormulaInText(text) {
+  if (!text) return text;
+
+  // If title already contains LaTeX subscripts, leave it alone (avoid double-formatting)
+  if (text.includes("$_")) return text;
+
+  // Replace patterns like Bi2Te3, MoS2, FePS3, WSe2, SnS2 etc.
+  // Rule: element symbol (Capital + optional lowercase) followed by digits -> subscript
+  // Example: Bi2Te3 -> Bi$_2$Te$_3$
+  const converted = text.replace(/\b([A-Z][a-z]?)(\d+)(?=[A-Z][a-z]?|\b)/g, (_, el, num) => {
+    return `${el}$_${num}$`;
+  });
+
+  // If we introduced any subscripts, wrap the full formula tokens in {...}
+  // Wrap only tokens that now contain $_
+  const wrapped = converted.replace(/\b([A-Za-z0-9\-\(\)]+?\$_\d+\$[A-Za-z0-9\-\(\)]*)\b/g, (m) => `{${m}}`);
+
+  return wrapped;
+}
 
 // ---------------------------
 // DOI extraction and URL enforcement
@@ -177,7 +196,8 @@ function parseEntry(entryText) {
 
 function formatEntry({ type, key, fields }) {
   // Normalize authors
-  if (fields.author) fields.author = normalizeAuthors(fields.author);
+  if (fields.title) fields.title = latexifyChemicalFormulaInText(fields.title);
+
 
   // Try DOI extraction from URL if DOI missing
   if (tryExtractDoi.checked && !fields.doi && fields.url) {
