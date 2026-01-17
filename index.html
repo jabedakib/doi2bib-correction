@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BibClean — Consistent BibTeX & DOI → BibTeX</title>
+
+  <!-- Tailwind CDN (fast MVP) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    /* a bit of “ultra professional” feel */
+    .glass { background: rgba(255,255,255,0.7); backdrop-filter: blur(10px); }
+    .shadow-soft { box-shadow: 0 10px 40px rgba(0,0,0,0.08); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+
+<body class="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 text-slate-900">
+  <header class="max-w-6xl mx-auto px-4 pt-10 pb-6">
+    <div class="flex items-center justify-between gap-4">
+      <div>
+        <h1 class="text-3xl sm:text-4xl font-semibold tracking-tight">BibClean</h1>
+        <p class="mt-2 text-slate-600 max-w-2xl">
+          Make BibTeX consistent. Convert DOI → BibTeX in a clean, clickable, publication-ready style.
+        </p>
+      </div>
+      <div class="hidden sm:flex items-center gap-2 text-sm text-slate-500">
+        <span class="px-3 py-1 rounded-full bg-white border border-slate-200">GitHub Pages Ready</span>
+        <span class="px-3 py-1 rounded-full bg-white border border-slate-200">No Backend</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 pb-16">
+    <div class="grid lg:grid-cols-12 gap-6">
+      <!-- left: controls -->
+      <section class="lg:col-span-4 glass shadow-soft rounded-2xl border border-slate-200 p-5">
+        <h2 class="text-lg font-semibold">Tools</h2>
+
+        <div class="mt-4 flex gap-2">
+          <button id="tabBib" class="flex-1 px-4 py-2 rounded-xl bg-slate-900 text-white">Fix .bib</button>
+          <button id="tabDoi" class="flex-1 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700">DOI → BibTeX</button>
+        </div>
+
+        <div class="mt-5 space-y-4">
+          <div class="rounded-xl bg-white border border-slate-200 p-4">
+            <h3 class="font-medium">Style rules</h3>
+            <div class="mt-3 space-y-2 text-sm text-slate-600">
+              <label class="flex items-center gap-2">
+                <input id="noDots" type="checkbox" class="accent-slate-900" checked />
+                No dots in initials (A Einstein, not A. Einstein)
+              </label>
+              <label class="flex items-center gap-2">
+                <input id="enforceDoiUrl" type="checkbox" class="accent-slate-900" checked />
+                If DOI exists, set URL = https://doi.org/&lt;doi&gt;
+              </label>
+              <label class="flex items-center gap-2">
+                <input id="tryExtractDoi" type="checkbox" class="accent-slate-900" checked />
+                Try extracting DOI from existing URL
+              </label>
+            </div>
+          </div>
+
+          <div class="rounded-xl bg-white border border-slate-200 p-4">
+            <h3 class="font-medium">Export</h3>
+            <div class="mt-3 flex gap-2">
+              <button id="btnCopy" class="flex-1 px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50">Copy</button>
+              <button id="btnDownload" class="flex-1 px-4 py-2 rounded-xl bg-slate-900 text-white hover:opacity-95">Download .bib</button>
+            </div>
+            <p id="status" class="mt-3 text-xs text-slate-500"></p>
+          </div>
+        </div>
+
+        <div class="mt-6 text-xs text-slate-500 leading-relaxed">
+          Notes: DOI fetching uses Crossref. Some items may miss fields if Crossref has limited metadata.
+        </div>
+      </section>
+
+      <!-- right: input/output -->
+      <section class="lg:col-span-8 space-y-6">
+        <div id="paneBib" class="glass shadow-soft rounded-2xl border border-slate-200 p-5">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="text-lg font-semibold">BibTeX Consistency Fixer</h2>
+            <label class="text-sm text-slate-600">
+              <input id="fileInput" type="file" accept=".bib" class="hidden"/>
+              <button id="btnUpload" class="px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50">Upload .bib</button>
+            </label>
+          </div>
+          <div class="mt-4 grid md:grid-cols-2 gap-4">
+            <div>
+              <p class="text-sm text-slate-600 mb-2">Input (.bib)</p>
+              <textarea id="bibIn" class="w-full h-72 mono text-sm p-3 rounded-xl border border-slate-200 bg-white" placeholder="@article{...}"></textarea>
+              <div class="mt-2 flex gap-2">
+                <button id="btnFormatBib" class="px-4 py-2 rounded-xl bg-slate-900 text-white">Make consistent</button>
+                <button id="btnClearBib" class="px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50">Clear</button>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm text-slate-600 mb-2">Output (consistent .bib)</p>
+              <textarea id="bibOut" class="w-full h-72 mono text-sm p-3 rounded-xl border border-slate-200 bg-white" readonly></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div id="paneDoi" class="hidden glass shadow-soft rounded-2xl border border-slate-200 p-5">
+          <h2 class="text-lg font-semibold">DOI → Consistent BibTeX</h2>
+          <p class="mt-2 text-sm text-slate-600">Paste one DOI per line. We’ll fetch from Crossref, then normalize.</p>
+          <div class="mt-4 grid md:grid-cols-2 gap-4">
+            <div>
+              <p class="text-sm text-slate-600 mb-2">Input (DOIs)</p>
+              <textarea id="doiIn" class="w-full h-64 mono text-sm p-3 rounded-xl border border-slate-200 bg-white" placeholder="10.1103/PhysRevLett.117.226801&#10;10.1038/s41586-..."></textarea>
+              <div class="mt-2">
+                <button id="btnConvertDoi" class="px-4 py-2 rounded-xl bg-slate-900 text-white">Convert</button>
+              </div>
+            </div>
+            <div>
+              <p class="text-sm text-slate-600 mb-2">Output (consistent .bib)</p>
+              <textarea id="doiOut" class="w-full h-64 mono text-sm p-3 rounded-xl border border-slate-200 bg-white" readonly></textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="max-w-6xl mx-auto px-4 pb-10 text-xs text-slate-500">
+    Built for consistent references: authors, DOI, URL (doi.org), and clean BibTeX structure.
+  </footer>
+
+  <script src="./app.js"></script>
+</body>
+</html>
