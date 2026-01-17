@@ -1,11 +1,12 @@
 // ---------------------------
-// Minimal BibTeX parser (MVP) + Consistent formatter
+// BibClean — Minimal BibTeX fixer + DOI -> consistent BibTeX
 // ---------------------------
-// Goals implemented:
-// 1) Author names ALWAYS -> "F M Lastname" (no dots, deterministic)
-// 2) Materials in title like Bi2Te3, MoS2, MnBi2Te4 -> {Bi$_2$Te$_3$}, {MoS$_2$}, {MnBi$_2$Te$_4$}
-// 3) DOI extraction from URL (optional) + enforce URL = https://doi.org/<doi> (optional)
-// 4) fix.bib and DOI->Bib share the SAME normalization pipeline (formatEntry)
+// Implements:
+// 1) fix.bib: author ALWAYS -> "F M Lastname" (no dots)
+// 2) title materials: Bi2Te3 / MoS2 / MnBi2Te4 -> {Bi$_2$Te$_3$} etc.
+// 3) DOI extraction from URL (optional)
+// 4) Enforce URL = https://doi.org/<doi> if DOI exists (optional)
+// 5) DOI->Bib via Crossref JSON, then SAME formatting pipeline as fix.bib
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,14 +30,14 @@ function setStatus(msg) {
 }
 
 // Tabs
-tabBib.addEventListener("click", () => {
+tabBib?.addEventListener("click", () => {
   paneBib.classList.remove("hidden");
   paneDoi.classList.add("hidden");
   tabBib.className = "flex-1 px-4 py-2 rounded-xl bg-slate-900 text-white";
   tabDoi.className = "flex-1 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700";
 });
 
-tabDoi.addEventListener("click", () => {
+tabDoi?.addEventListener("click", () => {
   paneDoi.classList.remove("hidden");
   paneBib.classList.add("hidden");
   tabDoi.className = "flex-1 px-4 py-2 rounded-xl bg-slate-900 text-white";
@@ -44,8 +45,8 @@ tabDoi.addEventListener("click", () => {
 });
 
 // Upload .bib
-$("btnUpload").addEventListener("click", () => $("fileInput").click());
-$("fileInput").addEventListener("change", async (e) => {
+$("btnUpload")?.addEventListener("click", () => $("fileInput")?.click());
+$("fileInput")?.addEventListener("change", async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
   const text = await file.text();
@@ -54,14 +55,14 @@ $("fileInput").addEventListener("change", async (e) => {
 });
 
 // Copy/Download
-$("btnCopy").addEventListener("click", async () => {
+$("btnCopy")?.addEventListener("click", async () => {
   const activeOut = paneBib.classList.contains("hidden") ? doiOut.value : bibOut.value;
   if (!activeOut.trim()) return setStatus("Nothing to copy.");
   await navigator.clipboard.writeText(activeOut);
   setStatus("Copied to clipboard.");
 });
 
-$("btnDownload").addEventListener("click", () => {
+$("btnDownload")?.addEventListener("click", () => {
   const content = paneBib.classList.contains("hidden") ? doiOut.value : bibOut.value;
   if (!content.trim()) return setStatus("Nothing to download.");
   const blob = new Blob([content], { type: "application/x-bibtex;charset=utf-8" });
@@ -80,18 +81,15 @@ $("btnDownload").addEventListener("click", () => {
 // ---------------------------
 
 function cleanToken(t) {
-  // remove dots/commas; keep hyphens and apostrophes
   return (t || "").replace(/[.,]/g, "").trim();
 }
 
 function makeInitialsFromGiven(given) {
-  // given can be "Albert", "Albert M", "A M", "A. M.", "Albert-Michel"
   const parts = (given || "")
     .replace(/\./g, " ")
     .split(/\s+/)
     .map(cleanToken)
     .filter(Boolean);
-
   return parts.map(p => p[0].toUpperCase()).join(" ");
 }
 
@@ -101,22 +99,27 @@ function normalizeOneAuthorStrict(rawName) {
 
   n = n.replace(/\s+/g, " ");
 
-  // If it's a corporate author in braces, keep as-is
-  // e.g., author = {{ATLAS Collaboration}}
+  // Keep corporate authors in double braces: {{ATLAS Collaboration}}
   if (n.startsWith("{") && n.endsWith("}")) return n;
 
-  // CASE 1: "Lastname, First Middle"
+  // "Lastname, First Middle"
   if (n.includes(",")) {
     const pieces = n.split(",").map(s => s.trim()).filter(Boolean);
     const family = cleanToken(pieces[0] || "");
     const given = pieces.slice(1).join(" ");
     const initials = makeInitialsFromGiven(given);
-    const out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
-    return noDots?.checked ? out.replace(/\./g, "") : out;
+    let out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
+    if (noDots?.checked) out = out.replace(/\./g, "");
+    return out;
   }
 
-  // CASE 2: "First Middle Lastname" or "F. M. Lastname" etc.
-  const tokens = n.split(" ").map(cleanToken).filter(Boolean);
+  // "First Middle Last"
+  const tokens = n
+    .replace(/\./g, " ")
+    .split(/\s+/)
+    .map(cleanToken)
+    .filter(Boolean);
+
   if (tokens.length === 1) return tokens[0];
 
   const family = tokens[tokens.length - 1];
@@ -127,8 +130,9 @@ function normalizeOneAuthorStrict(rawName) {
     .filter(Boolean)
     .join(" ");
 
-  const out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
-  return noDots?.checked ? out.replace(/\./g, "") : out;
+  let out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
+  if (noDots?.checked) out = out.replace(/\./g, "");
+  return out;
 }
 
 function normalizeAuthorsStrict(authorField) {
@@ -136,30 +140,25 @@ function normalizeAuthorsStrict(authorField) {
     .split(/\s+and\s+/i)
     .map(a => a.trim())
     .filter(Boolean);
-
   return authors.map(normalizeOneAuthorStrict).join(" and ");
 }
 
 // ---------------------------
-// Title: materials latexification
+// Title materials latexification
 // Example: Bi2Te3 -> {Bi$_2$Te$_3$}
 // ---------------------------
 
 function latexifyMaterialsInTitle(title) {
   if (!title) return title;
 
-  // If already LaTeX-y, don't touch
+  // Don't double-format LaTeX titles
   if (title.includes("$_") || title.includes("\\mathrm")) return title;
 
-  // Match tokens that are made of repeated element blocks (>=2) and contain digits
-  // Examples: Bi2Te3, MoS2, FePS3, MnBi2Te4, SnS2
+  // Match tokens like Bi2Te3, MoS2, FePS3, MnBi2Te4, SnS2
   return title.replace(/\b([A-Z][a-z]?\d*){2,}\b/g, (token) => {
     if (!/\d/.test(token)) return token;
 
-    // Convert each element+digits into element$_digits$
     const withSubs = token.replace(/([A-Z][a-z]?)(\d+)/g, (_, el, num) => `${el}$_${num}$`);
-
-    // Wrap whole formula token in braces (as you requested)
     return `{${withSubs}}`;
   });
 }
@@ -184,8 +183,7 @@ function doiUrl(doi) {
 // ---------------------------
 
 function splitEntries(bib) {
-  const raw = (bib || "").split(/(?=@\w+)/g).map(s => s.trim()).filter(Boolean);
-  return raw;
+  return (bib || "").split(/(?=@\w+)/g).map(s => s.trim()).filter(Boolean);
 }
 
 function parseEntry(entryText) {
@@ -215,19 +213,16 @@ function parseEntry(entryText) {
 }
 
 function formatEntry({ type, key, fields }) {
-  // 1) Authors strict format
+  // ✅ IMPORTANT: this is what makes fix.bib consistent
   if (fields.author) fields.author = normalizeAuthorsStrict(fields.author);
 
-  // 2) Title materials formatting
   if (fields.title) fields.title = latexifyMaterialsInTitle(fields.title);
 
-  // 3) Try DOI extraction from URL if DOI missing
   if (tryExtractDoi?.checked && !fields.doi && fields.url) {
     const d = extractDoiFromText(fields.url);
     if (d) fields.doi = d;
   }
 
-  // 4) Enforce url from DOI
   if (enforceDoiUrl?.checked && fields.doi) {
     const d = fields.doi.trim();
     fields.doi = d;
@@ -253,7 +248,7 @@ function formatEntry({ type, key, fields }) {
 }
 
 // Main: Bib fix
-$("btnFormatBib").addEventListener("click", () => {
+$("btnFormatBib")?.addEventListener("click", () => {
   setStatus("");
   const input = bibIn.value || "";
   if (!input.trim()) return setStatus("Paste a .bib first.");
@@ -268,7 +263,7 @@ $("btnFormatBib").addEventListener("click", () => {
   setStatus(`Formatted ${parsed.length} entr${parsed.length === 1 ? "y" : "ies"}.`);
 });
 
-$("btnClearBib").addEventListener("click", () => {
+$("btnClearBib")?.addEventListener("click", () => {
   bibIn.value = "";
   bibOut.value = "";
   setStatus("");
@@ -297,7 +292,6 @@ function crossrefToBibEntry(msg) {
   const doi = msg.DOI ?? "";
   const url = doi ? `https://doi.org/${doi}` : (msg.URL ?? "");
 
-  // Build a "given family" list; formatter will normalize to "F M Family"
   const authors = (msg.author || []).map(a => {
     const given = a.given ? a.given.trim() : "";
     const family = a.family ? a.family.trim() : "";
@@ -323,7 +317,7 @@ function crossrefToBibEntry(msg) {
   return { type, key, fields };
 }
 
-$("btnConvertDoi").addEventListener("click", async () => {
+$("btnConvertDoi")?.addEventListener("click", async () => {
   setStatus("");
   doiOut.value = "";
 
@@ -342,8 +336,6 @@ $("btnConvertDoi").addEventListener("click", async () => {
     try {
       const msg = await fetchCrossrefJson(doi);
       const entry = crossrefToBibEntry(msg);
-
-      // SAME pipeline as fix.bib
       combined += formatEntry(entry) + "\n";
       ok++;
     } catch (e) {
