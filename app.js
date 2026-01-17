@@ -80,67 +80,49 @@ $("btnDownload")?.addEventListener("click", () => {
 // Output ALWAYS: "F M Lastname" (no dots)
 // ---------------------------
 
-function cleanToken(t) {
-  return (t || "").replace(/[.,]/g, "").trim();
+function initialsFromGiven(given) {
+  // given: "Albert Einstein" -> "A E" (but we later keep family separately)
+  const parts = given.trim().split(/\s+/).filter(Boolean);
+  const letters = parts.map(p => p[0].toUpperCase());
+  return letters.join(" ");
 }
 
-function makeInitialsFromGiven(given) {
-  const parts = (given || "")
-    .replace(/\./g, " ")
-    .split(/\s+/)
-    .map(cleanToken)
-    .filter(Boolean);
-  return parts.map(p => p[0].toUpperCase()).join(" ");
-}
-
-function normalizeOneAuthorStrict(rawName) {
-  let n = (rawName || "").trim();
+function normalizeOneAuthor(name) {
+  // Handles:
+  //  - "Lastname, First Middle"
+  //  - "First Middle Lastname"
+  //  - "F. Lastname" or "F Lastname"
+  let n = name.trim();
   if (!n) return "";
 
+  // remove excessive spaces
   n = n.replace(/\s+/g, " ");
 
-  // Keep corporate authors in double braces: {{ATLAS Collaboration}}
-  if (n.startsWith("{") && n.endsWith("}")) return n;
-
-  // "Lastname, First Middle"
+  // If has comma: "Lastname, First Middle"
   if (n.includes(",")) {
-    const pieces = n.split(",").map(s => s.trim()).filter(Boolean);
-    const family = cleanToken(pieces[0] || "");
-    const given = pieces.slice(1).join(" ");
-    const initials = makeInitialsFromGiven(given);
-    let out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
-    if (noDots?.checked) out = out.replace(/\./g, "");
-    return out;
+    const [familyRaw, givenRaw] = n.split(",").map(s => s.trim());
+    const family = familyRaw;
+    const given = givenRaw || "";
+    const initials = initialsFromGiven(given.replace(/\./g, " "));
+    return `${initials} ${family}`.trim().replace(/\s+/g, " ");
   }
 
-  // "First Middle Last"
-  const tokens = n
-    .replace(/\./g, " ")
-    .split(/\s+/)
-    .map(cleanToken)
-    .filter(Boolean);
+  // Else assume "First Middle Last"
+  const parts = n.split(" ").filter(Boolean);
+  if (parts.length === 1) return parts[0];
 
-  if (tokens.length === 1) return tokens[0];
-
-  const family = tokens[tokens.length - 1];
-  const givenTokens = tokens.slice(0, -1);
-
-  const initials = givenTokens
-    .map(gt => (gt ? gt[0].toUpperCase() : ""))
-    .filter(Boolean)
-    .join(" ");
-
-  let out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
-  if (noDots?.checked) out = out.replace(/\./g, "");
-  return out;
+  const family = parts[parts.length - 1];
+  const given = parts.slice(0, -1).join(" ");
+  const initials = initialsFromGiven(given.replace(/\./g, " "));
+  return `${initials} ${family}`.trim().replace(/\s+/g, " ");
 }
 
-function normalizeAuthorsStrict(authorField) {
-  const authors = (authorField || "")
-    .split(/\s+and\s+/i)
-    .map(a => a.trim())
-    .filter(Boolean);
-  return authors.map(normalizeOneAuthorStrict).join(" and ");
+function normalizeAuthors(authorField) {
+  // BibTeX authors usually separated by " and "
+  const authors = authorField.split(/\s+and\s+/i).map(a => a.trim()).filter(Boolean);
+  let out = authors.map(normalizeOneAuthor).join(" and ");
+  if (noDots.checked) out = out.replace(/\./g, "");
+  return out;
 }
 
 // ---------------------------
