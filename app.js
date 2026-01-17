@@ -1,8 +1,11 @@
 // ---------------------------
-// Minimal BibTeX parser (MVP)
+// Minimal BibTeX parser (MVP) + Consistent formatter
 // ---------------------------
-// This is a simple parser that handles common BibTeX patterns.
-// For v2, we can swap in a robust library (e.g., bibtex-parse-js) or build a stronger parser.
+// Goals implemented:
+// 1) Author names ALWAYS -> "F M Lastname" (no dots, deterministic)
+// 2) Materials in title like Bi2Te3, MoS2, MnBi2Te4 -> {Bi$_2$Te$_3$}, {MoS$_2$}, {MnBi$_2$Te$_4$}
+// 3) DOI extraction from URL (optional) + enforce URL = https://doi.org/<doi> (optional)
+// 4) fix.bib and DOI->Bib share the SAME normalization pipeline (formatEntry)
 
 const $ = (id) => document.getElementById(id);
 
@@ -72,71 +75,93 @@ $("btnDownload").addEventListener("click", () => {
 });
 
 // ---------------------------
-// Name normalization
+// Author normalization (STRICT)
+// Output ALWAYS: "F M Lastname" (no dots)
 // ---------------------------
 
-function initialsFromGiven(given) {
-  // given: "Albert Einstein" -> "A E" (but we later keep family separately)
-  const parts = given.trim().split(/\s+/).filter(Boolean);
-  const letters = parts.map(p => p[0].toUpperCase());
-  return letters.join(" ");
+function cleanToken(t) {
+  // remove dots/commas; keep hyphens and apostrophes
+  return (t || "").replace(/[.,]/g, "").trim();
 }
 
-function normalizeOneAuthor(name) {
-  // Handles:
-  //  - "Lastname, First Middle"
-  //  - "First Middle Lastname"
-  //  - "F. Lastname" or "F Lastname"
-  let n = name.trim();
+function makeInitialsFromGiven(given) {
+  // given can be "Albert", "Albert M", "A M", "A. M.", "Albert-Michel"
+  const parts = (given || "")
+    .replace(/\./g, " ")
+    .split(/\s+/)
+    .map(cleanToken)
+    .filter(Boolean);
+
+  return parts.map(p => p[0].toUpperCase()).join(" ");
+}
+
+function normalizeOneAuthorStrict(rawName) {
+  let n = (rawName || "").trim();
   if (!n) return "";
 
-  // remove excessive spaces
   n = n.replace(/\s+/g, " ");
 
-  // If has comma: "Lastname, First Middle"
+  // If it's a corporate author in braces, keep as-is
+  // e.g., author = {{ATLAS Collaboration}}
+  if (n.startsWith("{") && n.endsWith("}")) return n;
+
+  // CASE 1: "Lastname, First Middle"
   if (n.includes(",")) {
-    const [familyRaw, givenRaw] = n.split(",").map(s => s.trim());
-    const family = familyRaw;
-    const given = givenRaw || "";
-    const initials = initialsFromGiven(given.replace(/\./g, " "));
-    return `${initials} ${family}`.trim().replace(/\s+/g, " ");
+    const pieces = n.split(",").map(s => s.trim()).filter(Boolean);
+    const family = cleanToken(pieces[0] || "");
+    const given = pieces.slice(1).join(" ");
+    const initials = makeInitialsFromGiven(given);
+    const out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
+    return noDots?.checked ? out.replace(/\./g, "") : out;
   }
 
-  // Else assume "First Middle Last"
-  const parts = n.split(" ").filter(Boolean);
-  if (parts.length === 1) return parts[0];
+  // CASE 2: "First Middle Lastname" or "F. M. Lastname" etc.
+  const tokens = n.split(" ").map(cleanToken).filter(Boolean);
+  if (tokens.length === 1) return tokens[0];
 
-  const family = parts[parts.length - 1];
-  const given = parts.slice(0, -1).join(" ");
-  const initials = initialsFromGiven(given.replace(/\./g, " "));
-  return `${initials} ${family}`.trim().replace(/\s+/g, " ");
+  const family = tokens[tokens.length - 1];
+  const givenTokens = tokens.slice(0, -1);
+
+  const initials = givenTokens
+    .map(gt => (gt ? gt[0].toUpperCase() : ""))
+    .filter(Boolean)
+    .join(" ");
+
+  const out = `${initials} ${family}`.trim().replace(/\s+/g, " ");
+  return noDots?.checked ? out.replace(/\./g, "") : out;
 }
 
-function normalizeAuthors(authorField) {
-  // BibTeX authors usually separated by " and "
-  const authors = authorField.split(/\s+and\s+/i).map(a => a.trim()).filter(Boolean);
-  let out = authors.map(normalizeOneAuthor).join(" and ");
-  if (noDots.checked) out = out.replace(/\./g, "");
-  return out;
+function normalizeAuthorsStrict(authorField) {
+  const authors = (authorField || "")
+    .split(/\s+and\s+/i)
+    .map(a => a.trim())
+    .filter(Boolean);
+
+  return authors.map(normalizeOneAuthorStrict).join(" and ");
 }
-function latexifyChemicalFormulaInText(text) {
-  if (!text) return text;
 
-  // If title already contains LaTeX subscripts, leave it alone (avoid double-formatting)
-  if (text.includes("$_")) return text;
+// ---------------------------
+// Title: materials latexification
+// Example: Bi2Te3 -> {Bi$_2$Te$_3$}
+// ---------------------------
 
-  // Replace patterns like Bi2Te3, MoS2, FePS3, WSe2, SnS2 etc.
-  // Rule: element symbol (Capital + optional lowercase) followed by digits -> subscript
-  // Example: Bi2Te3 -> Bi$_2$Te$_3$
-  const converted = text.replace(/\b([A-Z][a-z]?)(\d+)(?=[A-Z][a-z]?|\b)/g, (_, el, num) => {
-    return `${el}$_${num}$`;
+function latexifyMaterialsInTitle(title) {
+  if (!title) return title;
+
+  // If already LaTeX-y, don't touch
+  if (title.includes("$_") || title.includes("\\mathrm")) return title;
+
+  // Match tokens that are made of repeated element blocks (>=2) and contain digits
+  // Examples: Bi2Te3, MoS2, FePS3, MnBi2Te4, SnS2
+  return title.replace(/\b([A-Z][a-z]?\d*){2,}\b/g, (token) => {
+    if (!/\d/.test(token)) return token;
+
+    // Convert each element+digits into element$_digits$
+    const withSubs = token.replace(/([A-Z][a-z]?)(\d+)/g, (_, el, num) => `${el}$_${num}$`);
+
+    // Wrap whole formula token in braces (as you requested)
+    return `{${withSubs}}`;
   });
-
-  // If we introduced any subscripts, wrap the full formula tokens in {...}
-  // Wrap only tokens that now contain $_
-  const wrapped = converted.replace(/\b([A-Za-z0-9\-\(\)]+?\$_\d+\$[A-Za-z0-9\-\(\)]*)\b/g, (m) => `{${m}}`);
-
-  return wrapped;
 }
 
 // ---------------------------
@@ -146,7 +171,6 @@ function latexifyChemicalFormulaInText(text) {
 function extractDoiFromText(text) {
   if (!text) return "";
   const t = text.trim();
-  // Common DOI pattern: 10.<digits>/<suffix>
   const m = t.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
   return m ? m[0] : "";
 }
@@ -160,13 +184,11 @@ function doiUrl(doi) {
 // ---------------------------
 
 function splitEntries(bib) {
-  // Split by '@' but keep the '@'
-  const raw = bib.split(/(?=@\w+)/g).map(s => s.trim()).filter(Boolean);
+  const raw = (bib || "").split(/(?=@\w+)/g).map(s => s.trim()).filter(Boolean);
   return raw;
 }
 
 function parseEntry(entryText) {
-  // @type{key, field = {value}, ...}
   const headMatch = entryText.match(/^@(\w+)\s*\{\s*([^,]+)\s*,/s);
   if (!headMatch) return null;
 
@@ -175,7 +197,6 @@ function parseEntry(entryText) {
 
   const body = entryText.slice(headMatch[0].length).replace(/\}\s*$/s, "").trim();
 
-  // Parse fields (very common patterns: field = {...} or "..." )
   const fields = {};
   const fieldRegex = /(\w+)\s*=\s*(\{(?:[^{}]|\{[^{}]*\})*\}|"[^"]*"|[^,]+)\s*,?/gs;
 
@@ -184,7 +205,6 @@ function parseEntry(entryText) {
     const name = m[1].toLowerCase();
     let value = m[2].trim();
 
-    // strip wrapping quotes/braces lightly
     if (value.startsWith("{") && value.endsWith("}")) value = value.slice(1, -1).trim();
     if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1).trim();
 
@@ -195,24 +215,25 @@ function parseEntry(entryText) {
 }
 
 function formatEntry({ type, key, fields }) {
-  // Normalize authors
-  if (fields.title) fields.title = latexifyChemicalFormulaInText(fields.title);
+  // 1) Authors strict format
+  if (fields.author) fields.author = normalizeAuthorsStrict(fields.author);
 
+  // 2) Title materials formatting
+  if (fields.title) fields.title = latexifyMaterialsInTitle(fields.title);
 
-  // Try DOI extraction from URL if DOI missing
-  if (tryExtractDoi.checked && !fields.doi && fields.url) {
+  // 3) Try DOI extraction from URL if DOI missing
+  if (tryExtractDoi?.checked && !fields.doi && fields.url) {
     const d = extractDoiFromText(fields.url);
     if (d) fields.doi = d;
   }
 
-  // Enforce url from DOI
-  if (enforceDoiUrl.checked && fields.doi) {
+  // 4) Enforce url from DOI
+  if (enforceDoiUrl?.checked && fields.doi) {
     const d = fields.doi.trim();
     fields.doi = d;
     fields.url = doiUrl(d);
   }
 
-  // Preferred field order
   const preferred = ["author", "title", "journal", "booktitle", "year", "volume", "number", "pages", "doi", "url"];
   const lines = [];
 
@@ -220,7 +241,6 @@ function formatEntry({ type, key, fields }) {
     if (fields[f]) lines.push(`  ${f} = {${fields[f]}}`);
   }
 
-  // Include any other fields (kept at end)
   const extra = Object.keys(fields)
     .filter(f => !preferred.includes(f))
     .sort();
@@ -255,7 +275,7 @@ $("btnClearBib").addEventListener("click", () => {
 });
 
 // ---------------------------
-// DOI -> BibTeX (Crossref)
+// DOI -> BibTeX (Crossref JSON) -> consistent BibTeX
 // ---------------------------
 
 async function fetchCrossrefJson(doi) {
@@ -267,7 +287,7 @@ async function fetchCrossrefJson(doi) {
 }
 
 function crossrefToBibEntry(msg) {
-  const type = "article"; // default; we can map Crossref types later
+  const type = "article";
   const year = msg?.issued?.["date-parts"]?.[0]?.[0] ?? "";
   const title = (msg.title && msg.title[0]) ? msg.title[0] : "";
   const journal = (msg["container-title"] && msg["container-title"][0]) ? msg["container-title"][0] : "";
@@ -277,14 +297,13 @@ function crossrefToBibEntry(msg) {
   const doi = msg.DOI ?? "";
   const url = doi ? `https://doi.org/${doi}` : (msg.URL ?? "");
 
+  // Build a "given family" list; formatter will normalize to "F M Family"
   const authors = (msg.author || []).map(a => {
     const given = a.given ? a.given.trim() : "";
     const family = a.family ? a.family.trim() : "";
-    // Convert "given family" into "G F Family" later by your normalize function
     return [given, family].filter(Boolean).join(" ").trim();
   }).filter(Boolean).join(" and ");
 
-  // simple key: FirstAuthorFamilyYearFirstWord
   const firstFamily = (msg.author && msg.author[0] && msg.author[0].family) ? msg.author[0].family : "ref";
   const firstWord = title ? title.split(/\s+/)[0].replace(/[^A-Za-z0-9]/g, "") : "paper";
   const key = `${firstFamily}${year}${firstWord}`.replace(/\s+/g, "");
@@ -320,18 +339,18 @@ $("btnConvertDoi").addEventListener("click", async () => {
   let failed = 0;
 
   for (const doi of dois) {
-  try {
-    const msg = await fetchCrossrefJson(doi);
-    const entry = crossrefToBibEntry(msg);
+    try {
+      const msg = await fetchCrossrefJson(doi);
+      const entry = crossrefToBibEntry(msg);
 
-    // Apply your normalization pipeline
-    combined += formatEntry(entry) + "\n";
-    ok++;
-  } catch (e) {
-    combined += `% Failed DOI: ${doi} (${e.message})\n`;
-    failed++;
+      // SAME pipeline as fix.bib
+      combined += formatEntry(entry) + "\n";
+      ok++;
+    } catch (e) {
+      combined += `% Failed DOI: ${doi} (${e.message})\n`;
+      failed++;
+    }
   }
-}
 
   doiOut.value = combined.trim() + "\n";
   setStatus(`Converted ${ok} DOI(s). Failed: ${failed}.`);
